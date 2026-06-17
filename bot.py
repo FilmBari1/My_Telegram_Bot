@@ -6,7 +6,7 @@ import os
 from flask import Flask
 from threading import Thread
 
-# ==================== CONFIGURATION (LOADED) ====================
+# ==================== CONFIGURATION (আপনার আগের ডাটা) ====================
 API_TOKEN = '8720201406:AAFlNvQ-tTErzXJ8eV-MkkrTd3ns0qlY6DE'
 ADMIN_ID = 8513606329
 
@@ -20,19 +20,19 @@ MOVIE_CHANNEL_LINK = 'https://t.me/MovieGorBD'
 
 MASTER_WEB_LINK = 'https://filmbari1.github.io/MovieGor/?vid=-OvB3edV7fuCrJ7OnY48'
 MOVIE_WEB_LINK = 'https://filmbari1.github.io/MovieGor/'
-# ===============================================================
+# ========================================================================
 
-# ডাটা যেন না মুছে যায়, তার জন্য ডিস্ক পাথ সেট করা
-DB_PATH = "/data/bot_master_database.db"
+# ডাটা যেন না মুছে যায়, তার জন্য পারসিস্টেন্ট পাথ সেটআপ
+DB_FILE = "/data/bot_master_database.db"
 if not os.path.exists("/data"):
-    DB_PATH = "bot_master_database.db"
+    DB_FILE = "bot_master_database.db"
 
 bot = telebot.TeleBot(API_TOKEN)
 admin_states = {}
 
-# ------ DATABASE CORE ------
+# ------ ডেটাবেজ কোর ফাংশনসমূহ ------
 def get_db_connection():
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    conn = sqlite3.connect(DB_FILE, timeout=30)
     conn.execute("PRAGMA journal_mode=WAL;")
     return conn
 
@@ -46,24 +46,81 @@ def init_db():
 
 init_db()
 
-# (আপনার আগের সব ফাংশনগুলো যেমন: save_post, is_post_alive, save_user ইত্যাদি এখানে থাকবে)
-# আমি আপনার মূল ফাংশনগুলো এখানে রেখে দিয়েছি:
+# আপনার আগের সব লজিক ফাংশনগুলো এখানে আছে
+def delete_invalid_post(post_title, channel_type):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM posts WHERE text = ? AND channel_type = ?", (post_title, channel_type))
+    conn.commit()
+    conn.close()
+
+def is_post_alive(channel_id, msg_id):
+    try:
+        check_msg = bot.forward_message(chat_id=ADMIN_ID, from_chat_id=channel_id, message_id=msg_id, disable_notification=True)
+        bot.delete_message(chat_id=ADMIN_ID, message_id=check_msg.message_id)
+        return True
+    except: return False
+
+def save_user(user_id, referrer_id=None):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,))
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO users (user_id, referred_by) VALUES (?, ?)", (user_id, referrer_id))
+        conn.commit()
+    conn.close()
+
+def get_total_users():
+    conn = get_db_connection()
+    count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    conn.close()
+    return count
+
+def get_all_user_ids():
+    conn = get_db_connection()
+    users = [u[0] for u in conn.execute("SELECT user_id FROM users").fetchall()]
+    conn.close()
+    return users
+
+def get_user_refers(user_id):
+    conn = get_db_connection()
+    res = conn.execute("SELECT refer_count FROM users WHERE user_id = ?", (user_id,)).fetchone()
+    conn.close()
+    return res[0] if res else 0
 
 def save_post(raw_text, message_id, content_type, channel_type, file_id=None):
-    try:
-        if raw_text:
-            clean_title = raw_text.replace("এখানে চাপুন:", "").replace("MovieGor", "").replace("-", "").strip().lower()
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO posts (text, msg_id, content_type, file_id, channel_type) VALUES (?, ?, ?, ?, ?)", 
-                           (clean_title, message_id, content_type, file_id, channel_type))
-            conn.commit()
-            conn.close()
-    except Exception as e:
-        print(f"Error saving: {e}")
+    clean_title = re.sub(r'https?://[^\s]+', '', raw_text or "").replace("এখানে চাপুন:", "").replace("MovieGor", "").replace("-", "").strip().lower()
+    conn = get_db_connection()
+    conn.execute("INSERT INTO posts (text, msg_id, content_type, file_id, channel_type) VALUES (?, ?, ?, ?, ?)", 
+                 (clean_title or "untitled", message_id, content_type, file_id, channel_type))
+    conn.commit()
+    conn.close()
 
-# [আপনার আগের সব হ্যান্ডলার কোড এখানে থাকবে...]
-# @bot.message_handler(commands=['start']) ... ইত্যাদি সব আগের মতোই থাকবে।
+# ------ হ্যান্ডলারস (আপনার আগের লজিক) ------
+@bot.message_handler(commands=['start'])
+def start(message):
+    save_user(message.chat.id)
+    bot.reply_to(message, "আমাদের অল-ইন-ওয়ান ভিডিও ও মুভি বক্সে স্বাগতম!")
+
+@bot.message_handler(func=lambda message: True, content_types=['text'])
+def search_post(message):
+    query = message.text.lower().strip()
+    conn = get_db_connection()
+    matched_rows = conn.execute("SELECT text, channel_type, msg_id, content_type, file_id FROM posts WHERE text LIKE ?", ('%' + query + '%',)).fetchall()
+    conn.close()
+    if not matched_rows:
+        bot.reply_to(message, "দুঃখিত, এই নামে কোনো পোস্ট পাওয়া যায়নি।")
+        return
+    for row in matched_rows:
+        bot.send_message(message.chat.id, f"পাওয়া গেছে: {row[0]}")
+
+@bot.channel_post_handler(content_types=['text', 'photo'])
+def handle_channel_post(message):
+    ch_id = str(message.chat.id)
+    caption = message.text or message.caption
+    if ch_id == CHANNEL_ONE: save_post(caption, message.message_id, 'text', 'main', None)
+    elif ch_id == CHANNEL_TWO: save_post(caption, message.message_id, 'text', 'private', None)
+    elif ch_id == CHANNEL_MOVIE: save_post(caption, message.message_id, 'text', 'movie', None)
 
 # --- সার্ভার লজিক (২৪ ঘণ্টা সচল রাখতে) ---
 app = Flask('')
@@ -77,5 +134,4 @@ def run():
 if __name__ == "__main__":
     t = Thread(target=run)
     t.start()
-    print("বট এবং সার্ভার উভয়ই সফলভাবে চালু হয়েছে...")
     bot.infinity_polling(none_stop=True)
