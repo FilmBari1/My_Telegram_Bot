@@ -433,3 +433,20 @@ def handle_channel_post(message):
 
 print("ভিডিও + মুভি অল-ইন-ওয়ান সিস্টেম সফলভাবে লাইভ হয়েছে...")
 bot.polling(none_stop=True)
+import os
+from flask import Flask
+from threading import Thread
+
+# রেন্ডার যেন পোর্ট এরর না দেয় তার জন্য একটি ফেইক ওয়েব সার্ভার
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run():
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+
+# বট স্টার্ট করার আগে এই সার্ভারটি রান করবে
+t = Thread(target=run)
+t.start()
